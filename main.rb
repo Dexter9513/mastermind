@@ -14,7 +14,7 @@ module Colors
                  'b' => BLUE,
                  'y' => YELLOW,
                  'c' => CYAN,
-                 'p' => PURPLE }
+                 'p' => PURPLE }.freeze
 end
 
 module Symbols
@@ -39,7 +39,7 @@ class Peg
 
   @@selected_peg = nil
   attr_accessor :hidden
-  attr_reader :name
+  attr_reader :name, :color
 
   def self.selected_peg
     @@selected_peg
@@ -62,7 +62,7 @@ class Peg
   end
 
   def full?
-    @symbol == CIRCLE_SOLID ? true : false
+    @symbol == CIRCLE_SOLID
   end
 
   def display
@@ -114,6 +114,16 @@ class Board
     1.upto(4) { |index| @code.push(Peg.new("Code Peg##{index}")) }
   end
 
+  def help
+    puts "M A S T E R M I N D
+    Press ← → to navigate
+    Press <Enter> to confirm
+    Press <Spacebar> to exit the game
+    Color input:
+      r: red    g: green    b: blue
+      c: cyan   p: purple   y: yellow"
+  end
+
   def draw_box_top
     print BOX_TOP_LEFT + BOX_HORIZONTAL * 12 + BOX_T_DOWN + BOX_HORIZONTAL * 6 + BOX_TOP_RIGHT
     print "\n"
@@ -131,7 +141,8 @@ class Board
 
   def draw
     system('clear')
-    print "\n"
+    # print "\n"
+    help
     draw_box_top
     @guesses.each do |guess|
       print BOX_VERTICAL
@@ -193,12 +204,20 @@ class MasterMind
     Peg.selected_peg = @current_block.fetch(current_index - 1, @current_block.first)
   end
 
+  def quit
+    puts
+    Peg.selected_peg = nil
+    @board.draw
+    exit
+  end
+
   def color_from_stdin
     loop do
       input = $stdin.getch.downcase
       return ALL_COLORS[input] if ALL_COLORS.include?(input)
 
       case input
+      when ' ' then quit
       when "\r"
         return 'confirm' if block_full?
 
@@ -223,22 +242,77 @@ class MasterMind
     Peg.selected_peg = @current_block[0]
     loop do
       @board.draw
-      puts 'Press ← → to navigate'
-      puts 'Press <Enter> to confirm'
+
       print "Enter color for #{Peg.selected_peg.name}>> "
       input = color_from_stdin
       case input
       when 'left' then previous_peg
       when 'right' then next_peg
       when 'confirm'
-        puts 'Entry confirmed'
         break if block_full?
-
       else
         Peg.selected_peg.fill(input)
         next_peg
       end
     end
+  end
+
+  def calculate_feedback(pegs)
+    code = @board.code.map { |peg| peg.color }
+    guess = @current_block.map { |peg| peg.color }
+    
+    red_count = 0
+    white_count = 0
+
+    guess.each_with_index do |guess_color, guess_index|
+      if guess_color == code[guess_index]
+        red_count += 1
+        code[guess_index] = nil
+      else
+        code.each_with_index do |code_color, code_index|
+          if guess_color == code_color && code_color != guess[code_index]
+            white_count += 1
+            code[code_index] = nil
+          end
+        end
+      end
+    end
+
+    # exact_match_indices = []
+    # red_count = 0
+    # 3.downto(0) do |i|
+    #   if code[i] == guess[i]
+    #     exact_match_indices.append(i)
+    #     red_count += 1
+    #   end
+    # end
+    # exact_match_indices.each do |index|
+    #   code.delete_at(index)
+    #   guess.delete_at(index)
+    # end
+
+    # white_count = 0
+    # code.each do |color|
+    #   if guess.include?(color)
+    #     white_count += 1
+    #     guess.delete_at(guess.index(color))
+    #   end
+    # end
+
+    pegs.each do |peg|
+      if red_count > 0
+        red_count -= 1
+        peg.fill(RED)
+      elsif white_count > 0
+        white_count -= 1
+        peg.fill('white')
+      end
+    end
+    pegs.shuffle!
+  end
+
+  def check_endgame(pegs)
+    pegs.all? { |peg| peg.color == RED }
   end
 
   def code_setter_mode
@@ -249,36 +323,43 @@ class MasterMind
   def code_breaker_mode
     set_random_code
     hide_code
-    @board.guesses.each do |block|
+    @board.guesses.each_with_index do |block, _index|
       @current_block = block.guess
       fill_block
+      calculate_feedback(block.feedback)
+      if check_endgame(block.feedback)
+        @result = 'CONGRATULATIONS, YOU BROKE THE CODE!'
+        break
+      end
     end
+    @result ||= 'SORRY, YOU FAILED TO BREAK THE CODE!'
     unhide_code
   end
 
   def set_random_code
     @board.code.each do |peg|
       random_color = ALL_COLORS.values.sample
-       peg.fill(random_color)
+      peg.fill(random_color)
     end
   end
 
   def hide_code
-    @board.code.each { |peg| peg.hidden = true}
+    @board.code.each { |peg| peg.hidden = true }
   end
 
   def unhide_code
-    @board.code.each { |peg| peg.hidden = false}
+    @board.code.each { |peg| peg.hidden = false }
   end
 
   def start
     if @gamemode == 'code-setter'
-      code_setter_mode 
+      code_setter_mode
     else
       code_breaker_mode
     end
     Peg.selected_peg = nil
     @board.draw
+    puts @result
   end
 end
 
