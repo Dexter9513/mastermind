@@ -1,5 +1,22 @@
 # frozen_string_literal: true
 
+require 'io/console'
+
+module Colors
+  RED = 'red'
+  GREEN = 'green'
+  BLUE = 'blue'
+  YELLOW = 'yellow'
+  CYAN = 'cyan'
+  PURPLE = 'purple'
+  ALL_COLORS = { 'r' => RED,
+                 'g' => GREEN,
+                 'b' => BLUE,
+                 'y' => YELLOW,
+                 'c' => CYAN,
+                 'p' => PURPLE }
+end
+
 module Symbols
   CIRCLE_SOLID = "\u25cf"
   CIRCLE_HOLLOW = "\u25cb"
@@ -17,12 +34,26 @@ module Symbols
 end
 
 class Peg
-  @@selected_peg = nil
   include Symbols
+  include Colors
 
-  def initialize(color = nil)
-    @color = color
-    @symbol = color ? CIRCLE_SOLID : CIRCLE_HOLLOW
+  @@selected_peg = nil
+  attr_accessor :hidden
+  attr_reader :name
+
+  def self.selected_peg
+    @@selected_peg
+  end
+
+  def self.selected_peg=(peg)
+    @@selected_peg = peg
+  end
+
+  def initialize(name = nil)
+    @color = nil
+    @symbol = CIRCLE_HOLLOW
+    @hidden = false
+    @name = name
   end
 
   def fill(color)
@@ -30,14 +61,20 @@ class Peg
     @symbol = CIRCLE_SOLID
   end
 
+  def full?
+    @symbol == CIRCLE_SOLID ? true : false
+  end
+
   def display
     style = if @@selected_peg == self
               5 # blink
+            elsif hidden
+              8 # hidden
             else
               0 # default
             end
     case @color
-    when 'red'
+    when RED
       "\e[#{style};31m#{@symbol}\e[m"
     when 'green'
       "\e[#{style};32m#{@symbol}\e[m"
@@ -58,17 +95,23 @@ end
 class Guess
   attr_reader :guess, :feedback
 
-  def initialize
-    @guess = Array.new(4) { Peg.new }
+  def initialize(block_number)
+    @guess = []
+    @feedback = []
+    1.upto(4) { |index| @guess.push(Peg.new("Guess##{block_number} Peg##{index}")) }
     @feedback = Array.new(4) { Peg.new }
   end
 end
 
 class Board
   include Symbols
+  attr_reader :guesses, :code
+
   def initialize
-    @guesses = Array.new(12) { Guess.new }
-    @code = Array.new(4) { Peg.new(%w[red blue green cyan yellow purple].sample) }
+    @guesses = []
+    @code = []
+    1.upto(12) { |index| @guesses.push(Guess.new(index)) }
+    1.upto(4) { |index| @code.push(Peg.new("Code Peg##{index}")) }
   end
 
   def draw_box_top
@@ -87,6 +130,8 @@ class Board
   end
 
   def draw
+    system('clear')
+    print "\n"
     draw_box_top
     @guesses.each do |guess|
       print BOX_VERTICAL
@@ -111,11 +156,128 @@ class Board
 end
 
 class MasterMind
+  include Colors
+  include Symbols
+
   def initialize
     @board = Board.new
+    set_game_mode
+  end
+
+  def set_game_mode
+    loop do
+      puts 'What do you want to be:'
+      puts '1. Code Breaker'
+      puts '2. Code Setter'
+      print '>> '
+      case gets.chomp
+      when '1'
+        @gamemode = 'code-breaker'
+        break
+      when '2'
+        @gamemode = 'code-setter'
+        break
+      else
+        puts 'Invalid choice!'
+      end
+    end
+  end
+
+  def next_peg
+    current_index = @current_block.index(Peg.selected_peg)
+    Peg.selected_peg = @current_block.fetch(current_index + 1, @current_block.last)
+  end
+
+  def previous_peg
+    current_index = @current_block.index(Peg.selected_peg)
+    Peg.selected_peg = @current_block.fetch(current_index - 1, @current_block.first)
+  end
+
+  def color_from_stdin
+    loop do
+      input = $stdin.getch.downcase
+      return ALL_COLORS[input] if ALL_COLORS.include?(input)
+
+      case input
+      when "\r"
+        return 'confirm' if block_full?
+
+        puts "\nPlease fill all pegs!"
+      when '['  # CSI
+        case $stdin.getch
+        when 'D' then return 'left'
+        when 'C' then return 'right'
+        end
+      else
+        print "\nInvalid Color! Enter again>>"
+      end
+    end
+  end
+
+  def block_full?
+    @current_block.each { |peg| return false unless peg.full? }
+    true
+  end
+
+  def fill_block
+    Peg.selected_peg = @current_block[0]
+    loop do
+      @board.draw
+      puts 'Press ← → to navigate'
+      puts 'Press <Enter> to confirm'
+      print "Enter color for #{Peg.selected_peg.name}>> "
+      input = color_from_stdin
+      case input
+      when 'left' then previous_peg
+      when 'right' then next_peg
+      when 'confirm'
+        puts 'Entry confirmed'
+        break if block_full?
+
+      else
+        Peg.selected_peg.fill(input)
+        next_peg
+      end
+    end
+  end
+
+  def code_setter_mode
+    @current_block = @board.code
+    fill_block
+  end
+
+  def code_breaker_mode
+    set_random_code
+    hide_code
+    @board.guesses.each do |block|
+      @current_block = block.guess
+      fill_block
+    end
+    unhide_code
+  end
+
+  def set_random_code
+    @board.code.each do |peg|
+      random_color = ALL_COLORS.values.sample
+       peg.fill(random_color)
+    end
+  end
+
+  def hide_code
+    @board.code.each { |peg| peg.hidden = true}
+  end
+
+  def unhide_code
+    @board.code.each { |peg| peg.hidden = false}
   end
 
   def start
+    if @gamemode == 'code-setter'
+      code_setter_mode 
+    else
+      code_breaker_mode
+    end
+    Peg.selected_peg = nil
     @board.draw
   end
 end
