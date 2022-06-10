@@ -116,12 +116,13 @@ class Board
 
   def help
     puts "M A S T E R M I N D
-    Press ← → to navigate
-    Press <Enter> to confirm
-    Press <Spacebar> to exit the game
-    Color input:
+    Inputs:
+      ← →: navigate    <Enter>: confirm    <spacebar>: quit
       r: red    g: green    b: blue
-      c: cyan   p: purple   y: yellow"
+      c: cyan   p: purple   y: yellow
+    Feedback:
+      \e[31m#{CIRCLE_SOLID}\e[m: Color and Position both match
+      #{CIRCLE_SOLID}: Color match but not Position"
   end
 
   def draw_box_top
@@ -141,7 +142,6 @@ class Board
 
   def draw
     system('clear')
-    # print "\n"
     help
     draw_box_top
     @guesses.each do |guess|
@@ -222,7 +222,7 @@ class MasterMind
         return 'confirm' if block_full?
 
         puts "\nPlease fill all pegs!"
-      when '['  # CSI
+      when '['
         case $stdin.getch
         when 'D' then return 'left'
         when 'C' then return 'right'
@@ -257,10 +257,20 @@ class MasterMind
     end
   end
 
+  def fill_block_auto(pegs)
+    Peg.selected_peg = @current_block[0]
+    pegs.each do |color|
+      @board.draw
+      sleep(0.1)
+      Peg.selected_peg.fill(color)
+      next_peg
+    end
+  end
+
   def calculate_feedback(pegs)
-    code = @board.code.map { |peg| peg.color }
-    guess = @current_block.map { |peg| peg.color }
-    
+    code = @board.code.map(&:color)
+    guess = @current_block.map(&:color)
+
     red_count = 0
     white_count = 0
 
@@ -270,45 +280,28 @@ class MasterMind
         code[guess_index] = nil
       else
         code.each_with_index do |code_color, code_index|
-          if guess_color == code_color && code_color != guess[code_index]
-            white_count += 1
-            code[code_index] = nil
-          end
+          next unless guess_color == code_color && code_color != guess[code_index]
+
+          white_count += 1
+          code[code_index] = nil
+          break
         end
       end
     end
 
-    # exact_match_indices = []
-    # red_count = 0
-    # 3.downto(0) do |i|
-    #   if code[i] == guess[i]
-    #     exact_match_indices.append(i)
-    #     red_count += 1
-    #   end
-    # end
-    # exact_match_indices.each do |index|
-    #   code.delete_at(index)
-    #   guess.delete_at(index)
-    # end
-
-    # white_count = 0
-    # code.each do |color|
-    #   if guess.include?(color)
-    #     white_count += 1
-    #     guess.delete_at(guess.index(color))
-    #   end
-    # end
+    to_return = [red_count, white_count]
 
     pegs.each do |peg|
-      if red_count > 0
+      if red_count.positive?
         red_count -= 1
         peg.fill(RED)
-      elsif white_count > 0
+      elsif white_count.positive?
         white_count -= 1
         peg.fill('white')
       end
     end
     pegs.shuffle!
+    to_return
   end
 
   def check_endgame(pegs)
@@ -318,12 +311,28 @@ class MasterMind
   def code_setter_mode
     @current_block = @board.code
     fill_block
+
+    guesser = CodeGuesser.new
+
+    @board.guesses.each do |block|
+      @current_block = block.guess
+      fill_block_auto(guesser.guess)
+      feedback = calculate_feedback(block.feedback)
+      @board.draw
+      sleep(0.2)
+      if feedback[0] == 4
+        @result = 'SORRY, YOUR CODE WAS BROKEN!'
+        break
+      end
+      guesser.evaluate_feedback(feedback)
+    end
+    @result ||= 'CONGRATULATIONS, YOU CODE WASN\'T BROKEN!'
   end
 
   def code_breaker_mode
     set_random_code
     hide_code
-    @board.guesses.each_with_index do |block, _index|
+    @board.guesses.each do |block|
       @current_block = block.guess
       fill_block
       calculate_feedback(block.feedback)
@@ -360,6 +369,108 @@ class MasterMind
     Peg.selected_peg = nil
     @board.draw
     puts @result
+  end
+end
+
+class CodeGuesser
+  include Colors
+
+  def initialize
+    @colors = ALL_COLORS.values.shuffle
+    @tracker = {}
+    @voids = []
+    @fixed = [nil, nil, nil, nil]
+    @choice = nil
+  end
+
+  def next_color
+    if @choice
+      return @colors[@colors.index(@choice) + 1] if @voids.empty?
+
+      @tracker.each do |key, value|
+        fixed_positions = @fixed.count(key)
+        possible_possitions = value[:positions].length
+        return key if possible_possitions > fixed_positions
+      end
+
+      loop do
+        @choice = @colors[@colors.index(@choice) + 1]
+        return @choice unless @voids.include?(@choice)
+      end
+    else
+      @colors[0]
+    end
+  end
+
+  def next_guess
+    @trial_positions = []
+    guess = @fixed.dup
+    if @tracker.include?(@choice)
+      @tracker[@choice][:positions].each do |position|
+        next unless @fixed[position].nil?
+
+        guess[position] = @choice
+        @trial_positions.push(position)
+        break
+      end
+      guess.map { |color| color.nil? ? @voids.sample : color }
+    else
+      guess.each_with_index do |color, index|
+        next unless color.nil?
+
+        guess[index] = @choice
+        @trial_positions.push(index)
+      end
+      guess
+    end
+  end
+
+  def guess
+    @choice = next_color
+    next_guess
+  end
+
+  def clean_tracker(position)
+    @tracker.each do |key, value|
+      value[:positions].delete(position) unless key == @choice
+    end
+  end
+
+  def evaluate_feedback(feedback)
+    match = feedback.sum
+    new_match = match - @fixed.compact.length
+    if new_match.positive?
+      @tracker[@choice] ||= {}
+      color = @tracker[@choice]
+      if @trial_positions.size == 1
+        if feedback[1] == 1
+          color[:positions].delete(@trial_positions[0])
+          if color[:count] == color[:positions].size
+            color[:positions].each do |position|
+              @fixed[position] = @choice
+              clean_tracker(position)
+            end
+          end
+        else
+          @fixed[@trial_positions[0]] = @choice
+          clean_tracker(@trial_positions[0])
+          if @fixed.count(@choice) == color[:count]
+            color[:positions].select! { |position| position <= @trial_positions[0] }
+          end
+        end
+      else
+        color[:count] = new_match
+        color[:positions] = @trial_positions
+        if new_match == @trial_positions.length && !feedback[1].positive?
+          @trial_positions.each do |position|
+            @fixed[position] = @choice
+            clean_tracker(position)
+          end
+        end
+      end
+    else
+      @voids.push(@choice)
+    end
   end
 end
 
