@@ -261,7 +261,7 @@ class MasterMind
     Peg.selected_peg = @current_block[0]
     pegs.each do |color|
       @board.draw
-      sleep(0.1)
+      sleep(0.2)
       Peg.selected_peg.fill(color)
       next_peg
     end
@@ -318,7 +318,6 @@ class MasterMind
       @current_block = block.guess
       fill_block_auto(guesser.guess)
       feedback = calculate_feedback(block.feedback)
-      @board.draw
       sleep(0.2)
       if feedback[0] == 4
         @result = 'SORRY, YOUR CODE WAS BROKEN!'
